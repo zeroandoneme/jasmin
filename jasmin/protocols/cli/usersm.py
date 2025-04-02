@@ -34,7 +34,7 @@ MtMessagingCredentialKeyMap = {'class': 'MtMessagingCredential',
 
 SmppsCredentialKeyMap = {'class': 'SmppsCredential',
                          'keyMapValue': 'smpps_credential',
-                         'Authorization': {'bind': 'bind'},
+                         'Authorization': {'bind': 'bind', 'client_ip_address': 'client_ip_address'},
                          'Quota': {'max_bindings': 'max_bindings'}}
 
 # A config map between console-configuration keys and User keys.

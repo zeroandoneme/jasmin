@@ -15,8 +15,8 @@ class RouterAuthChecker:
     def requestAvatarId(self, creds):
         user = self.router_factory.authenticateUser(
             creds.username,
-            creds.password)
-
+            creds.password,
+            creds.client_ip_address)
         # Username / Password correct ?
         if user is not None:
             return defer.succeed(creds.username)

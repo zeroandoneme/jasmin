@@ -3,6 +3,8 @@ A set of objects used by Jasmin to manage users, groups and connectors in memory
 """
 
 import re
+import ipaddress
+
 from hashlib import md5
 
 from jasmin.tools.singleton import Singleton
@@ -33,8 +35,13 @@ class CredentialGeneric(jasminApiGeneric):
     def setAuthorization(self, key, value):
         if key not in self.authorizations:
             raise jasminApiCredentialError('%s is not a valid Authorization' % key)
-        if not isinstance(value, bool):
+        if key != 'client_ip_address' and not isinstance(value, bool):
             raise jasminApiCredentialError('%s is not a boolean value: %s' % (key, value))
+        if key == 'client_ip_address' and isinstance(value,str):
+            subnets = []
+            for subnet in value.split(","):
+                subnets.append(ipaddress.ip_network(subnet))
+            value = subnets
 
         self.authorizations[key] = value
 
@@ -164,11 +171,13 @@ class MtMessagingCredential(CredentialGeneric):
 class SmppsCredential(CredentialGeneric):
     """Credential set for SMPP Server connection"""
 
-    def __init__(self, default_authorizations=True):
+    def __init__(self, default_authorizations=True, default_client_ip_address=ipaddress.ip_network('0.0.0.0/0')):
         if not isinstance(default_authorizations, bool):
             default_authorizations = False
 
-        self.authorizations = {'bind': default_authorizations, }
+        if not isinstance(default_client_ip_address, ipaddress.ip_network):
+            default_client_ip_address = ipaddress.ip_network('0.0.0.0/0')
+        self.authorizations = {'bind': default_authorizations , 'client_ip_address': default_client_ip_address, }
 
         self.quotas = {'max_bindings': None}
 

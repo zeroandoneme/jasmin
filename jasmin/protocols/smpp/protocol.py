@@ -528,7 +528,6 @@ class SMPPServerProtocol(twistedSMPPServerProtocol):
             self.factory.stats.inc('bind_rx_count')
         elif bind_type == CommandId.bind_transmitter:
             self.factory.stats.inc('bind_tx_count')
-
         # Check the authentication
         username = reqPDU.params['system_id'].decode()
         password = reqPDU.params['password'].decode()

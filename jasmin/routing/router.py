@@ -2,6 +2,8 @@ import pickle
 import sys
 import logging
 import time
+import ipaddress
+
 from copy import copy
 from hashlib import md5
 from logging.handlers import TimedRotatingFileHandler
@@ -286,7 +288,7 @@ class RouterPB(pb.Avatar):
     def getMTRoutingTable(self):
         return self.mt_routing_table
 
-    def authenticateUser(self, username, password, return_pickled=False):
+    def authenticateUser(self, username, password, client_ip_address, return_pickled=False):
         """Authenticate a user agains username and password and return user object or None
         """
         # Find user having correct username/password
@@ -307,6 +309,16 @@ class RouterPB(pb.Avatar):
                                   username)
                     return None
 
+                # Check if user binding from allowed IP
+                if _user.smpps_credential is not None:
+                    allowed_subnets = _user.smpps_credential.getAuthorization('client_ip_address')
+                    if allowed_subnets:
+                        client_ip = ipaddress.ip_address(client_ip_address)
+                        if any(client_ip in subnet for subnet in allowed_subnets):
+                            self.log.info('allowing connection from client ip %s', client_ip_address)
+                        else:
+                            self.log.info('client ip %s  is not in the allowed subnets %s', client_ip_address, allowed_subnets)
+                            return None
                 # If user/group are enabled:
                 if return_pickled:
                     return pickle.dumps(_user, self.pickleProtocol)
