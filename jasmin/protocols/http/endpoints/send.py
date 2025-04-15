@@ -19,6 +19,8 @@ from jasmin.protocols.http.errors import (HttpApiError, AuthenticationError, Ser
                      ChargingError, ThroughputExceededError, InterceptorNotSetError,
                      InterceptorNotConnectedError, InterceptorRunError)
 from jasmin.protocols.http.endpoints import hex2bin, authenticate_user
+from jasmin.managers.content import ChargingErrorContent
+from jasmin.error.logger import getErrorLogger
 
 
 def update_submit_sm_pdu(routable, config, config_update_params=None):
@@ -325,8 +327,8 @@ class Send(Resource):
                     # Ensure user have enough balance to pay submit_sm and submit_sm_resp
                     charging_requirements.append({
                         'condition': bill.getTotalAmounts() * submit_sm_count <= u_balance,
-                        'error_message': 'Not enough balance (%s) for charging: %s' % (
-                            u_balance, bill.getTotalAmounts())})
+                        'error_message': 'Not enough balance (%s) for charging: %s to user %s' % (
+                            u_balance, bill.getTotalAmounts(), user)})
                 if u_subsm_count is not None:
                     # Ensure user have enough submit_sm_count to to cover
                     # the bill action (decrement_submit_sm_count)
@@ -339,6 +341,16 @@ class Send(Resource):
                     self.stats.inc('charging_error_count')
                     self.log.error('Charging user %s failed, [bid:%s] [ttlamounts:%s] SubmitSmPDU (x%s)',
                                    user, bill.bid, bill.getTotalAmounts(), submit_sm_count)
+
+                    reason = ", ".join(req["error_message"] for req in charging_requirements)
+                    self.log.info('reason => %s', reason)  
+                    event_type = 'ChargingError'
+                    source_addr = None if b'from' not in updated_request.args else updated_request.args[b'from'][0]
+                    destination_addr = updated_request.args[b'to'][0]
+                    data_coding=int(updated_request.args[b'coding'][0])                    
+                    content = ChargingErrorContent(event_type, user.uid, source_addr, destination_addr, routedConnector.cid, short_message, dlr_level_text, data_coding, reason)
+                    amqpErrorLogger = getErrorLogger()
+                    yield amqpErrorLogger.errorLogger(self.log, content)
                     raise ChargingError('Cannot charge submit_sm, check RouterPB log file for details')
             else:
                 bill = None

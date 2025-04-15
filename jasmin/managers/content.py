@@ -210,3 +210,27 @@ class SubmitSmRespBillContent(Content):
         properties = {'message-id': bid, 'headers': {'user-id': uid, 'amount': str(amount)}}
 
         Content.__init__(self, bid, properties=properties)
+
+class ChargingErrorContent(Content):
+    """A Charge Error is published to messaging.* routes for logging"""
+
+    def __init__(self, event_type, uid, source_addr, destination_addr, cid, short_message, dlr_level_text, data_coding, reason):
+        properties = {'headers': {'user-id': uid, 'type': event_type}}
+        message = joinMessage(event_type, uid, source_addr, destination_addr, cid, short_message, dlr_level_text, data_coding, reason)
+        Content.__init__(self, message, properties=properties)
+
+def joinMessage(event_type, *args):    
+    timestamp = datetime.datetime.now().isoformat()
+    processed_args = []
+
+    for arg in args:
+        if isinstance(arg, bytes):  
+            processed_args.append(arg.decode())  # Decode bytes  
+        elif isinstance(arg, (list, tuple)) and len(arg) == 1:  
+            processed_args.append(str(arg[0]))  # Extract value from single-element tuple/list  
+        else:
+            processed_args.append(str(arg))
+
+    log_entry = [event_type] + [timestamp] + processed_args 
+    log_line = ",".join(log_entry) 
+    return log_line
