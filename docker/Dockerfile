@@ -66,7 +66,7 @@ RUN sed -i "/\[amqp-broker\]/a host=$AMQP_BROKER_HOST" ${CONFIG_PATH}/jasmin.cfg
 EXPOSE 2775 8990 1401
 VOLUME ["/var/log/jasmin", "/etc/jasmin", "/etc/jasmin/store"]
 
-COPY docker/docker-entrypoint.sh /
+COPY docker/docker-entrypoint.sh /docker-entrypoint.sh
 ENTRYPOINT ["/docker-entrypoint.sh"]
 CMD ["jasmind.py", "--enable-interceptor-client", "--enable-dlr-thrower", "--enable-dlr-lookup", "-u", "jcliadmin", "-p", "jclipwd"]
 # Notes:
