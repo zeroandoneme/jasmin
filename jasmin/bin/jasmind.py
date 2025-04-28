@@ -39,6 +39,8 @@ from jasmin.tools.cred.portal import SmppsRealm
 from jasmin.tools.spread.pb import JasminPBPortalRoot
 from jasmin.config import ROOT_PATH
 from jasmin.bin import BaseDaemon
+from jasmin.error.logger import amqpErrorLogger, setErrorLogger
+
 
 CONFIG_PATH = os.getenv('CONFIG_PATH', '%s/etc/jasmin/' % ROOT_PATH)
 
@@ -340,6 +342,12 @@ class JasminDaemon(BaseDaemon):
         if self.components['interceptor-pb-client'].isConnected:
             return self.components['interceptor-pb-client'].disconnect()
 
+    def startErrorLoggerService(self):
+        """Start Error Logger"""
+
+        amqpErrorLoggerInstance = amqpErrorLogger(self.components['amqp-broker-factory'])
+        setErrorLogger(amqpErrorLoggerInstance)
+
     @defer.inlineCallbacks
     def start(self):
         """Start Jasmind daemon"""
@@ -462,6 +470,8 @@ class JasminDaemon(BaseDaemon):
                 self.log.error("  Cannot start jCli: %s\n%s" % (e, traceback.format_exc()))
             else:
                 self.log.info("  jCli Started.")
+
+        self.startErrorLoggerService()
 
     @defer.inlineCallbacks
     def stop(self):

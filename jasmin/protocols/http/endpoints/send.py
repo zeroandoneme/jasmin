@@ -1,24 +1,27 @@
-from datetime import datetime, timedelta
-import re
 import json
 import pickle
+import re
+from datetime import datetime, timedelta
 
+from smpp.pdu.constants import priority_flag_value_map
+from smpp.pdu.pdu_types import RegisteredDeliveryReceipt, RegisteredDelivery
+from smpp.pdu.smpp_time import parse
 from twisted.internet import reactor, defer
 from twisted.web.resource import Resource
 from twisted.web.server import NOT_DONE_YET
-from smpp.pdu.constants import priority_flag_value_map
-from smpp.pdu.smpp_time import parse
-from smpp.pdu.pdu_types import RegisteredDeliveryReceipt, RegisteredDelivery
 
-from jasmin.routing.Routables import RoutableSubmitSm
-from jasmin.protocols.smpp.configs import SMPPClientConfig
-from jasmin.protocols.smpp.operations import SMPPOperationFactory
+from jasmin.error.logger import getErrorLogger
+from jasmin.managers.content import ChargingErrorContent
+from jasmin.protocols.http.endpoints import hex2bin, authenticate_user
+from jasmin.protocols.http.errors import (HttpApiError, ServerError, RouteNotFoundError,
+                                          ConnectorNotFoundError,
+                                          ChargingError, ThroughputExceededError, InterceptorNotSetError,
+                                          InterceptorNotConnectedError, InterceptorRunError)
 from jasmin.protocols.http.errors import UrlArgsValidationError
 from jasmin.protocols.http.validation import UrlArgsValidator, HttpAPICredentialValidator
-from jasmin.protocols.http.errors import (HttpApiError, AuthenticationError, ServerError, RouteNotFoundError, ConnectorNotFoundError,
-                     ChargingError, ThroughputExceededError, InterceptorNotSetError,
-                     InterceptorNotConnectedError, InterceptorRunError)
-from jasmin.protocols.http.endpoints import hex2bin, authenticate_user
+from jasmin.protocols.smpp.configs import SMPPClientConfig
+from jasmin.protocols.smpp.operations import SMPPOperationFactory
+from jasmin.routing.Routables import RoutableSubmitSm
 
 
 def update_submit_sm_pdu(routable, config, config_update_params=None):
@@ -126,13 +129,12 @@ class Send(Resource):
 
             # Update SubmitSmPDU by default values from user MtMessagingCredential
             SubmitSmPDU = v.updatePDUWithUserDefaults(SubmitSmPDU)
-            
+
             # Force same default values on subPDU while multipart
             _pdu = SubmitSmPDU
             while hasattr(_pdu, 'nextPdu'):
-              _pdu = _pdu.nextPdu
-              _pdu = v.updatePDUWithUserDefaults(_pdu)
-            
+                _pdu = _pdu.nextPdu
+                _pdu = v.updatePDUWithUserDefaults(_pdu)
 
             # Prepare for interception then routing
             routedConnector = None  # init
@@ -189,10 +191,18 @@ class Send(Resource):
                 if self.interceptorpb_client is None:
                     self.stats.inc('interceptor_error_count')
                     self.log.error("InterceptorPB not set !")
+                    reason = "InterceptorPB not set !"
+                    self.log.info('reason => %s', reason)
+                    event_type = 'InterceptorNotSetError'
+                    yield self.handle_interceptor( updated_request, user, routedConnector, short_message, dlr_level_text, reason, event_type)
                     raise InterceptorNotSetError('InterceptorPB not set !')
                 if not self.interceptorpb_client.isConnected:
                     self.stats.inc('interceptor_error_count')
                     self.log.error("InterceptorPB not connected !")
+                    reason = "InterceptorPB not connected !"
+                    self.log.info('reason => %s', reason)
+                    event_type = 'InterceptorNotSetError'
+                    yield self.handle_interceptor( updated_request, user, routedConnector, short_message, dlr_level_text, reason, event_type)
                     raise InterceptorNotConnectedError('InterceptorPB not connected !')
 
                 script = interceptor.getScript()
@@ -220,6 +230,8 @@ class Send(Resource):
             if route is None:
                 self.stats.inc('route_error_count')
                 self.log.error("No route matched from user %s for SubmitSmPDU: %s", user, routable.pdu)
+                reason = f"No route matched from user {user} for SubmitSmPDU: {routable.pdu}"
+                yield self.handle_interceptor(updated_request, user, routedConnector, short_message, dlr_level_text, reason, "RouteNotFoundError")
                 raise RouteNotFoundError("No route found")
 
             # Get connector from selected route
@@ -249,6 +261,8 @@ class Send(Resource):
             if routedConnector is None:
                 self.stats.inc('route_error_count')
                 self.log.error("Failover route has no bound connector to handle SubmitSmPDU: %s", routable.pdu)
+                reason = f"Failover route has no bound connector to handle SubmitSmPDU: {routable.pdu}"
+                yield self.handle_interceptor( updated_request, user, routedConnector, short_message, dlr_level_text, reason, "ConnectorNotFoundError")
                 raise ConnectorNotFoundError("Failover route has no bound connectors")
 
             # Re-update SubmitSmPDU with parameters from the route's connector
@@ -290,7 +304,8 @@ class Send(Resource):
                                                 config_update_params=list(param_updates))
 
             # QoS throttling
-            if (user.mt_credential.getQuota('http_throughput') and user.mt_credential.getQuota('http_throughput') >= 0) and user.getCnxStatus().httpapi[
+            if (user.mt_credential.getQuota('http_throughput') and user.mt_credential.getQuota(
+                    'http_throughput') >= 0) and user.getCnxStatus().httpapi[
                 'qos_last_submit_sm_at'] != 0:
                 qos_throughput_second = 1 / float(user.mt_credential.getQuota('http_throughput'))
                 qos_throughput_ysecond_td = timedelta(microseconds=qos_throughput_second * 1000000)
@@ -302,7 +317,8 @@ class Send(Resource):
                         qos_delay,
                         qos_throughput_ysecond_td,
                         user)
-
+                    reason = f"QoS: submit_sm_event is faster ({qos_delay}) than fixed throughput ({qos_throughput_ysecond_td}), user:{user}, rejecting message."
+                    yield self.handle_interceptor( updated_request, user, routedConnector, short_message, dlr_level_text, reason, "ThroughputExceededError")
                     raise ThroughputExceededError("User throughput exceeded")
             user.getCnxStatus().httpapi['qos_last_submit_sm_at'] = datetime.now()
 
@@ -325,8 +341,9 @@ class Send(Resource):
                     # Ensure user have enough balance to pay submit_sm and submit_sm_resp
                     charging_requirements.append({
                         'condition': bill.getTotalAmounts() * submit_sm_count <= u_balance,
-                        'error_message': 'Not enough balance (%s) for charging: %s' % (
-                            u_balance, bill.getTotalAmounts())})
+                        'error_message': 'Not enough balance (%s) for charging: %s to user %s' % (
+                            u_balance, bill.getTotalAmounts(), user)})
+
                 if u_subsm_count is not None:
                     # Ensure user have enough submit_sm_count to to cover
                     # the bill action (decrement_submit_sm_count)
@@ -339,6 +356,11 @@ class Send(Resource):
                     self.stats.inc('charging_error_count')
                     self.log.error('Charging user %s failed, [bid:%s] [ttlamounts:%s] SubmitSmPDU (x%s)',
                                    user, bill.bid, bill.getTotalAmounts(), submit_sm_count)
+
+                    reason = ", ".join(req["error_message"] for req in charging_requirements)
+                    self.log.info('reason => %s', reason)
+                    event_type = 'ChargingError'
+                    yield self.handle_interceptor( updated_request, user, routedConnector, short_message, dlr_level_text, reason, event_type)
                     raise ChargingError('Cannot charge submit_sm, check RouterPB log file for details')
             else:
                 bill = None
@@ -362,6 +384,9 @@ class Send(Resource):
             if not c.result:
                 self.stats.inc('server_error_count')
                 self.log.error('Failed to send SubmitSmPDU to [cid:%s]', routedConnector.cid)
+                reason = f"Failed to send SubmitSmPDU to [cid:{routedConnector.cid}]"
+                event_type = 'ServerError'
+                yield self.handle_interceptor( updated_request, user, routedConnector, short_message, dlr_level_text, reason, event_type)
                 raise ServerError('Cannot send submit_sm, check SMPPClientManagerPB log file for details')
             else:
                 self.stats.inc('success_count')
@@ -438,7 +463,7 @@ class Send(Resource):
                       # through HttpAPICredentialValidator
                       b'priority': {'optional': True, 'pattern': re.compile(rb'^[0-3]$')},
                       b'sdt': {'optional': True,
-                              'pattern': re.compile(rb'^\d{2}\d{2}\d{2}\d{2}\d{2}\d{2}\d{1}\d{2}(\+|-|R)$')},
+                               'pattern': re.compile(rb'^\d{2}\d{2}\d{2}\d{2}\d{2}\d{2}\d{1}\d{2}(\+|-|R)$')},
                       # Validity period validation pattern can be validated/filtered further more
                       # through HttpAPICredentialValidator
                       b'validity-period': {'optional': True, 'pattern': re.compile(rb'^\d+$')},
@@ -446,12 +471,12 @@ class Send(Resource):
                       b'dlr-url': {'optional': True, 'pattern': re.compile(rb'^(http|https)\://.*$')},
                       # DLR Level validation pattern can be validated/filtered further more
                       # through HttpAPICredentialValidator
-                      b'dlr-level'   : {'optional': True, 'pattern': re.compile(rb'^[1-3]$')},
-                      b'dlr-method'  : {'optional': True, 'pattern': re.compile(rb'^(get|post)$', re.IGNORECASE)},
-                      b'tags'        : {'optional': True, 'pattern': re.compile(rb'^([-a-zA-Z0-9,])*$')},
-                      b'content'     : {'optional': True},
-                      b'hex-content' : {'optional': True},
-                      b'custom_tlvs' : {'optional': True}}
+                      b'dlr-level': {'optional': True, 'pattern': re.compile(rb'^[1-3]$')},
+                      b'dlr-method': {'optional': True, 'pattern': re.compile(rb'^(get|post)$', re.IGNORECASE)},
+                      b'tags': {'optional': True, 'pattern': re.compile(rb'^([-a-zA-Z0-9,])*$')},
+                      b'content': {'optional': True},
+                      b'hex-content': {'optional': True},
+                      b'custom_tlvs': {'optional': True}}
 
             if updated_request.getHeader(b'content-type') == b'application/json':
                 json_body = updated_request.content.read()
@@ -514,7 +539,8 @@ class Send(Resource):
             self.log.debug("Returning %s to %s.", response, updated_request.getClientIP())
             updated_request.setResponseCode(response['status'])
 
-            return b'Error "%s"' % (response['return'] if isinstance(response['return'], bytes) else response['return'].encode())
+            return b'Error "%s"' % (
+                response['return'] if isinstance(response['return'], bytes) else response['return'].encode())
         except Exception as e:
             self.log.error("Error: %s", e)
             response = {'return': "Unknown error: %s" % e, 'status': 500}
@@ -529,3 +555,24 @@ class Send(Resource):
     def render_GET(self, request):
         """Allow GET /send for backward compatibility"""
         return self.render_POST(request)
+
+    @defer.inlineCallbacks
+    def handle_interceptor(self, updated_request, user, routedConnector, short_message, dlr_level_text, reason, event_type):
+        self.log.info('reason => %s', reason)
+        source_addr = None if b'from' not in updated_request.args else updated_request.args[b'from'][0]
+        destination_addr = updated_request.args[b'to'][0]
+        data_coding = int(updated_request.args[b'coding'][0])
+
+        content = ChargingErrorContent(
+        event_type,
+        user.uid,
+        source_addr,
+        destination_addr,
+        routedConnector.cid,
+        short_message,
+        dlr_level_text,
+        data_coding,
+        reason
+        )
+        amqpErrorLogger = getErrorLogger()
+        yield amqpErrorLogger.errorLogger(self.log, content)
