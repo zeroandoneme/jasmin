@@ -311,14 +311,32 @@ class RouterPB(pb.Avatar):
 
                 # Check if user binding from allowed IP
                 if _user.smpps_credential is not None:
+
                     allowed_subnets = _user.smpps_credential.getAuthorization('client_ip_address')
-                    if allowed_subnets:
+
+                    if not allowed_subnets:
+                        self.log.info('No allowed subnets configured for user %s, denying access', username)
+                        return None  # IP check must be enforced
+
+                    if not client_ip_address:
+                        self.log.info('No client IP address provided, denying access for user %s', username)
+                        return None
+
+                    if isinstance(client_ip_address, bytes):
+                        client_ip_address = client_ip_address.decode()
+
+                    try:
                         client_ip = ipaddress.ip_address(client_ip_address)
-                        if any(client_ip in subnet for subnet in allowed_subnets):
-                            self.log.info('allowing connection from client ip %s', client_ip_address)
-                        else:
-                            self.log.info('client ip %s  is not in the allowed subnets %s', client_ip_address, allowed_subnets)
-                            return None
+                    except ValueError:
+                        self.log.info('Invalid client IP address format: %s', client_ip_address)
+                        return None
+
+                    if self.ip_allowed(client_ip, allowed_subnets):
+                        self.log.info('Allowing connection from client IP %s', client_ip_address)
+                    else:
+                        self.log.info('Client IP %s is not in the allowed subnets %s', client_ip_address, allowed_subnets)
+                        return None
+
                 # If user/group are enabled:
                 if return_pickled:
                     return pickle.dumps(_user, self.pickleProtocol)
@@ -327,6 +345,18 @@ class RouterPB(pb.Avatar):
 
         self.log.info('authenticateUser [username:%s] returned None', username)
         return None
+
+    def ip_allowed(self,client_ip, allowed_subnets):
+        for subnet in allowed_subnets:
+            if isinstance(subnet, (str, bytes)):
+                if '/' in subnet:
+                    subnet = ipaddress.ip_network(subnet, strict=False)
+                else:
+                    subnet = ipaddress.ip_address(subnet)
+            if (isinstance(subnet, (ipaddress.IPv4Network, ipaddress.IPv6Network)) and client_ip in subnet) or \
+                    (isinstance(subnet, (ipaddress.IPv4Address, ipaddress.IPv6Address)) and client_ip == subnet):
+                return True
+        return False
 
     def chargeUserForSubmitSms(self, user, bill, submit_sm_count=1, requirements=None):
         """Will charge the user using the bill object after checking requirements
@@ -742,11 +772,10 @@ class RouterPB(pb.Avatar):
 
         return True
 
-    def perspective_user_authenticate(self, username, password):
+    def perspective_user_authenticate(self, username, password, ip):
         self.log.debug('Authenticating with username:%s and password:%s', username, password)
         self.log.info('Authentication request with username:%s', username)
-
-        return self.authenticateUser(username, password, True)
+        return self.authenticateUser(username, password, ip,True)
 
     def perspective_user_enable(self, uid):
         self.log.info('Enabling a User (id:%s)', uid)

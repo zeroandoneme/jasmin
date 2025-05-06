@@ -30,8 +30,8 @@ class RouterPBProxy(JasminPBProxy):
         return self.pb.callRemote('user_add', self.pickle(user))
 
     @ConnectedPB
-    def user_authenticate(self, username, password):
-        return self.pb.callRemote('user_authenticate', username, password)
+    def user_authenticate(self, username, password, ip):
+        return self.pb.callRemote('user_authenticate', username, password, ip)
 
     @ConnectedPB
     def user_remove(self, uid):

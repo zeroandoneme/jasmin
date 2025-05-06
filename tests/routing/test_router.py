@@ -1429,6 +1429,7 @@ class SubmitSmTestCaseTools:
         self.params = {'to': '06155423',
                        'username': self.u1.username,
                        'password': user_password,
+
                        'content': 'test'}
 
         if hasattr(self, 'AckServer'):

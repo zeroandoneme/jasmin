@@ -101,6 +101,7 @@ class Send(Resource):
             user = authenticate_user(
                 updated_request.args[b'username'][0],
                 updated_request.args[b'password'][0],
+                updated_request.args[b'ip'][0],
                 self.RouterPB,
                 self.stats,
                 self.log
@@ -431,6 +432,7 @@ class Send(Resource):
             # Validation (must have almost the same params as /rate service)
             fields = {b'to': {'optional': False, 'pattern': re.compile(rb'^\+{0,1}\d+$')},
                       b'from': {'optional': True},
+                      b'ip': {'optional': True},
                       b'coding': {'optional': True, 'pattern': re.compile(rb'^(0|1|2|3|4|5|6|7|8|9|10|13|14){1}$')},
                       b'username': {'optional': False, 'pattern': re.compile(rb'^.{1,16}$')},
                       b'password': {'optional': False, 'pattern': re.compile(rb'^.{1,16}$')},

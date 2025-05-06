@@ -14,15 +14,19 @@ def hex2bin(hex_content):
     except Exception as e:
         raise UrlArgsValidationError("Invalid hex-content data: '%s'" % hex_content)
 
-def authenticate_user(username, password, routerpb, stats, log):
+def authenticate_user(username, password,client_ip_address,  routerpb, stats, log):
     if isinstance(username, bytes):
         username = username.decode()
     if isinstance(password, bytes):
         password = password.decode()
 
+    log.info(
+        "trying to authenticate user %s and ip %s",
+        username, client_ip_address)
     user = routerpb.authenticateUser(
         username=username,
-        password=password)
+        password=password,
+        client_ip_address=client_ip_address)
     if user is None:
         stats.inc('auth_error_count')
 

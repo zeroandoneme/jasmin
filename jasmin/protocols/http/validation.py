@@ -168,6 +168,9 @@ class HttpAPICredentialValidator(AbstractCredentialValidator):
             if _r is None or (_r.pattern != b'.*' and not _r.match(_value)):
                 raise CredentialValidationError(
                     'Value filter failed for user [%s] (content filter mismatch).' % self.user)
+        if b'ip' not in self.request.args or not self.request.args[b'ip'][0]:
+            raise CredentialValidationError(
+                'Missing required argument [ip] for user [%s].' % self.user)
 
     def updatePDUWithUserDefaults(self, PDU):
         """Will update SubmitSmPDU.params from User credential defaults whenever a
